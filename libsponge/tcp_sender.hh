@@ -8,7 +8,7 @@
 
 #include <functional>
 #include <queue>
-
+#include <list>
 //! \brief The "sender" part of a TCP implementation.
 
 //! Accepts a ByteStream, divides it up into segments and sends the
@@ -31,6 +31,23 @@ class TCPSender {
 
     //! the (absolute) sequence number for the next byte to be sent
     uint64_t _next_seqno{0};
+
+    // 追踪已确认和待发送的序列号
+    uint64_t _ack_abs_seqno{0};           // 接收方最新确认的绝对序列号
+    uint64_t _bytes_in_flight{0};         // 在途（已发送但未确认）的序列号总数
+
+    // 窗口和控制标志
+    uint16_t _window_size{1};             // 接收方通告的窗口大小 (初始设为 1 用于 SYN)
+    bool _syn_sent{false};                // 标记是否已发送 SYN
+    bool _fin_sent{false};                // 标记是否已发送 FIN
+
+    // 重传和 RTO 计时器
+    size_t _rto;                          // 当前的重传超时时间
+    size_t _timer_ms{0};                  // 计时器计数
+    unsigned int _consecutive_retransmissions{0}; // 连续重传次数
+
+    // 存储在途段以便追踪和重传
+    std::list<TCPSegment> _outstanding_segments{};
 
   public:
     //! Initialize a TCPSender

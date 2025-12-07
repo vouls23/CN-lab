@@ -5,6 +5,8 @@
 
 #include <optional>
 #include <queue>
+#include <vector>
+#include <map>
 
 //! \brief A wrapper for NetworkInterface that makes the host-side
 //! interface asynchronous: instead of returning received datagrams
@@ -41,13 +43,24 @@ class AsyncNetworkInterface : public NetworkInterface {
 //! \brief A router that has multiple network interfaces and
 //! performs longest-prefix-match routing between them.
 class Router {
+    struct RouteEntry {
+        uint32_t route_prefix;
+        uint8_t prefix_length;
+        std::optional<Address> next_hop;
+        size_t interface_num;
+    };
+
     //! The router's collection of network interfaces
     std::vector<AsyncNetworkInterface> _interfaces{};
 
+    //! The router's collection of routing table entries
+    std::vector<RouteEntry> _routing_table{};
     //! Send a single datagram from the appropriate outbound interface to the next hop,
     //! as specified by the route with the longest prefix_length that matches the
     //! datagram's destination address.
     void route_one_datagram(InternetDatagram &dgram);
+
+    std::optional<RouteEntry> find_longest_prefix_match(const uint32_t dst_addr);
 
   public:
     //! Add an interface to the router

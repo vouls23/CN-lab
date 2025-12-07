@@ -19,6 +19,9 @@ class TCPReceiver {
 
     //! The maximum number of bytes we'll store.
     size_t _capacity;
+  private:
+    std::optional<WrappingInt32> _isn {};  // 存储初始序列号 (ISN)
+    bool _syn_received {false};            // 标记是否已收到 SYN 包
 
   public:
     //! \brief Construct a TCP receiver
