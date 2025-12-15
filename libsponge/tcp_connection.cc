@@ -119,7 +119,13 @@ void TCPConnection::segment_received(const TCPSegment &seg) {
 
     // 3. 如果设置了ACK标志，则告诉TCPSender它关心的传入段的字段：ackno和window_size。
     if (seg.header().ack) {
-        _sender.ack_received(seg.header().ackno, seg.header().win);
+        // 【修正 3.1】: 只有在连接已经开始建立（我方已发送SYN或已收到对端SYN）时，才让TCPSender处理ACK。
+        // - 我方已发送SYN：_sender.bytes_in_flight() > 0 (包括SYN本身)
+        // - 已收到对端SYN：_receiver.ackno().has_value()
+        // 在LISTEN状态，两者都为 false，因此纯 ACK 会被忽略，sender 状态将保持不变。
+        if (_receiver.ackno().has_value() || _sender.bytes_in_flight() > 0) {
+            _sender.ack_received(seg.header().ackno, seg.header().win);
+        }
     }
     
     // --- Linger after streams finish 逻辑 (被动关闭) ---
@@ -132,13 +138,21 @@ void TCPConnection::segment_received(const TCPSegment &seg) {
     
     // --- 填充窗口和发送分段 ---
     _sender.fill_window();
+    // 【修正 1.1】: 记录在发送分段之前 _segments_out 的大小，用于检查是否已发送过段。
+    size_t segments_out_size_before = _segments_out.size(); 
     send_segments_from_sender(); // 辅助函数：为发送队列中的分段填充 ACK/Win 并移入 _segments_out
 
-    // 4 & 5. 如果没有数据段待发送，且收到的段占用了序列空间（SYN/FIN/数据）或者接收方有有效的 ackno (需要发送一个 ACK)
-    if (_sender.segments_out().empty() && (_receiver.ackno().has_value() || original_seg.length_in_sequence_space() > 0)) {
-        // 发送一个空的 ACK 数据段 (用于 keep-alive 或 纯ACK 响应)
-        _sender.send_empty_segment();
-        send_segments_from_sender();
+    // 4 & 5. 如果没有数据段待发送（即上面没有发送任何东西），
+    // 且收到的段占用了序列空间（SYN/FIN/数据）或者接收方有有效的 ackno (需要发送一个 ACK)
+    
+    // 【修正 1.2】: 检查本次调用是否已经发送了段，如果已发送，则不再发送纯 ACK。
+    if (_segments_out.size() == segments_out_size_before) {
+        // 【修正 1.3】: 仅在接收到的段占用了序列空间时才发送纯 ACK，以避免冗余 ACK 错误。
+        if (original_seg.length_in_sequence_space() > 0) {
+            // 发送一个空的 ACK 数据段 (用于 keep-alive 或 纯ACK 响应)
+            _sender.send_empty_segment();
+            send_segments_from_sender();
+        }
     }
     
     // 检查是否可以优雅关闭
@@ -234,7 +248,14 @@ void TCPConnection::connect() {
 
 TCPConnection::~TCPConnection() {
     try {
-        if (active()) {
+        // 检查是否满足优雅关闭的条件
+        bool streams_ended_gracefully = _receiver.stream_out().input_ended() && 
+                                        _sender.stream_in().input_ended() && 
+                                        _sender.bytes_in_flight() == 0;
+
+        // 【修正 2.1】: 仅在 active() 为 true 且**未达到优雅关闭条件**时，才执行“非正常关闭”。
+        // 如果 active() 为 true 且已达到优雅关闭条件 (streams_ended_gracefully 为 true)，则处于 TIME-WAIT 状态，不发送 RST。
+        if (active() && !streams_ended_gracefully) {
             cerr << "Warning: Unclean shutdown of TCPConnection\n";
 
             // Your code here: need to send a RST segment to the peer
